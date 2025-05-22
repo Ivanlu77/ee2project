@@ -95,16 +95,60 @@ void readSensor() {
   rawAccelY = a.acceleration.y;
   rawAccelZ = a.acceleration.z;
   
+  // 添加中值滤波 - 减少异常值影响
+  static float xBuffer[5] = {0};
+  static float zBuffer[5] = {0};
+  static int bufferIndex = 0;
+  
+  // 更新缓冲区
+  xBuffer[bufferIndex] = rawAccelX;
+  zBuffer[bufferIndex] = rawAccelZ;
+  bufferIndex = (bufferIndex + 1) % 5;
+  
+  // 冒泡排序找出中值
+  float xCopy[5], zCopy[5];
+  for(int i=0; i<5; i++) {
+    xCopy[i] = xBuffer[i];
+    zCopy[i] = zBuffer[i];
+  }
+  
+  for(int i=0; i<4; i++) {
+    for(int j=0; j<4-i; j++) {
+      if(xCopy[j] > xCopy[j+1]) {
+        float temp = xCopy[j];
+        xCopy[j] = xCopy[j+1];
+        xCopy[j+1] = temp;
+      }
+      if(zCopy[j] > zCopy[j+1]) {
+        float temp = zCopy[j];
+        zCopy[j] = zCopy[j+1];
+        zCopy[j+1] = temp;
+      }
+    }
+  }
+  
+  // 使用中值
+  float medianX = xCopy[2];
+  float medianZ = zCopy[2];
+  
+  // 添加低通滤波 - 平滑数据
+  static float filteredX = 0;
+  static float filteredZ = 0;
+  const float FILTER_ALPHA = 0.2; // 滤波系数，越小滤波越强
+  
+  filteredX = filteredX * (1 - FILTER_ALPHA) + medianX * FILTER_ALPHA;
+  filteredZ = filteredZ * (1 - FILTER_ALPHA) + medianZ * FILTER_ALPHA;
+  
   // For vertical mounting, we need to use Z axis for forward/backward tilt
   float primaryAxis, zeroPoint;
   
 #if TILT_AXIS_Z
   // Use Z axis for tilt (may be more appropriate for vertical mounting)
-  primaryAxis = rawAccelZ;
+  primaryAxis = filteredZ; // 使用滤波后的值
   zeroPoint = accelZZero;
 #else
   // Use X axis for tilt
-  primaryAxis = rawAccelX;
+  primaryAxis = filteredX; // 使用滤波后的值
   zeroPoint = accelXZero;
 #endif
   
@@ -114,13 +158,26 @@ void readSensor() {
   // Convert to angle (simplified)
   // For vertical mounting, positive delta should be forward tilt, negative is backward
   // We invert the sign to make forward tilt positive and backward negative
-  currentAngle = -delta * ANGLE_SCALE;
+  float newAngle = -delta * ANGLE_SCALE;
+  
+  // 对角度应用平滑滤波
+  static float smoothedAngle = 0;
+  const float ANGLE_SMOOTH = 0.3; // 角度平滑系数
+  smoothedAngle = smoothedAngle * (1 - ANGLE_SMOOTH) + newAngle * ANGLE_SMOOTH;
+  
+  currentAngle = smoothedAngle;
 }
 
 // PID calculation function
 float calculatePID() {
   // Calculate error
   error = BALANCE_SETPOINT - currentAngle;
+  
+  // 忽略极小误差以防止微小抖动
+  if (abs(error) < 0.5) {
+    error = 0;
+    return 0; // 直接返回零输出
+  }
   
   // Calculate integral term with anti-windup
   integral += error * CONTROL_INTERVAL / 1000.0;
@@ -130,8 +187,8 @@ float calculatePID() {
     integral = 0;
   }
   
-  // Limit integral to prevent windup
-  const float MAX_INTEGRAL = 1.0;
+  // 改进的积分限幅 - 动态值与KI匹配
+  const float MAX_INTEGRAL = MAX_SPEED / (2.0 * KI);
   if (integral > MAX_INTEGRAL) integral = MAX_INTEGRAL;
   if (integral < -MAX_INTEGRAL) integral = -MAX_INTEGRAL;
   
@@ -146,9 +203,25 @@ float calculatePID() {
   // Calculate PID output
   output = KP * error + KI * integral + KD * filteredDerivative;
   
-  // Limit output to maximum speed
+  // 平滑输出变化
+  static float lastOutput = 0;
+  const float OUTPUT_SMOOTH = 0.3; // 平滑系数
+  output = output * OUTPUT_SMOOTH + lastOutput * (1 - OUTPUT_SMOOTH);
+  lastOutput = output;
+  
+  // 限制输出不超过最大速度
   if (output > MAX_SPEED) output = MAX_SPEED;
   if (output < -MAX_SPEED) output = -MAX_SPEED;
+  
+  // 定期打印调试信息
+  static unsigned long lastDebugTime = 0;
+  if (millis() - lastDebugTime > 500) {
+    lastDebugTime = millis();
+    Serial.print("角度: ");
+    Serial.print(error, 1);
+    Serial.print("  PID输出: ");
+    Serial.println(output, 1);
+  }
   
   // Apply deadband - if output is very small, set to zero
   if (abs(output) < MOTOR_DEADBAND) output = 0;
@@ -273,12 +346,13 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long printTimer = 0;    // Next print time
-  static unsigned long controlTimer = 0;  // Next control update time
+  static uint32_t printTimer = 0;    // Next print time
+  static uint32_t controlTimer = 0;  // Next control update time
+  uint32_t now = millis();
   
-  // Run the control loop at high frequency
-  if (millis() >= controlTimer) {
-    controlTimer += CONTROL_INTERVAL;
+  // Run the control loop at high frequency - 修正溢出问题
+  if ((uint32_t)(now - controlTimer) >= CONTROL_INTERVAL) {
+    controlTimer = now;
     
     // Read sensor data
     readSensor();
@@ -291,9 +365,9 @@ void loop() {
     step2.setTargetSpeedRad(-motorSpeed);
   }
   
-  // Print debug information periodically
-  if (millis() >= printTimer) {
-    printTimer += PRINT_INTERVAL;
+  // Print debug information periodically - 修正溢出问题
+  if ((uint32_t)(now - printTimer) >= PRINT_INTERVAL) {
+    printTimer = now;
     
 #if TILT_AXIS_Z
     Serial.print("Z-axis: ");
