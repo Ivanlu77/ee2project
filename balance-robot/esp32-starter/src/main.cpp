@@ -23,12 +23,13 @@ TaskHandle_t serialHandle;     // 如不需要串口控制可注释
 static constexpr int PRINT_MS          = 500;
 static constexpr int LOOP_MS           = 10;
 static constexpr int STEP_ISR_US       = 20;
-static constexpr double ALPHA_COMP     = 0.98;
+static constexpr double ALPHA_COMP     = 0.98;//互补滤波系数
 static constexpr double DEAD_BAND      = 7.0;
 static constexpr float  WHEEL_DIA_CM   = 6.6;
 static constexpr int    STEPS_REV      = 200*16;
 static constexpr float  TRACK_CM       = 11.9;
 static constexpr float  EMA_ALPHA      = 0.1;
+static constexpr float TILT_OFFSET = -0.12;  // 开始设为0，然后根据需要调整
 
 // ---------- 传感器 / 执行件 ----------
 ESP32Timer hwTimer(3);
@@ -36,7 +37,7 @@ step motorL(STEP_ISR_US, M1_STP, M1_DIR);
 step motorR(STEP_ISR_US, M2_STP, M2_DIR);
 ImuSensor imu;
 
-PIDLoop pidBal (800, 18, 80, 0);
+PIDLoop pidBal (800, 18, 78, 0);
 PIDLoop pidSpd (1,   0.38, 0.23, 0);
 PIDLoop pidYaw (3,     0,     0, 0);
 
@@ -89,6 +90,7 @@ void serialCommandTask(void*) {
 void stabilityTask(void*) {
     constexpr float distPerStep = (PI * WHEEL_DIA_CM) / STEPS_REV;
     static unsigned long nextLoop = 0, nextPrint = 0;
+    static double lastBalOut = 0;
 
     for (;;) {
         const unsigned long now = millis();
@@ -127,11 +129,13 @@ void stabilityTask(void*) {
                 else           yawCorr = 0;
 
                 // 速度外环 → 目标倾角
-                const double targetTilt = pidSpd.run(spdCmS) * 0.001;
+                const double targetTilt = pidSpd.run(spdCmS) * 0.001 + TILT_OFFSET;
 
                 // 平衡内环
                 pidBal.target(targetTilt);
                 double balOut = pidBal.run(filtAngle);
+                balOut = balOut * 0.7 + lastBalOut * 0.3;  // 输出平滑
+                lastBalOut = balOut;
                 if (fabs(balOut) < DEAD_BAND) balOut = 0;
 
                 motorL.setAccelerationRad(-balOut - turnCmd + yawCorr);
