@@ -29,7 +29,7 @@ static constexpr float  WHEEL_DIA_CM   = 6.6;
 static constexpr int    STEPS_REV      = 200*16;
 static constexpr float  TRACK_CM       = 11.9;
 static constexpr float  EMA_ALPHA      = 0.1;
-static constexpr float TILT_OFFSET = -0.12;  // 开始设为0，然后根据需要调整
+static constexpr float TILT_OFFSET = -0.042;  // 开始设为0，然后根据需要调整
 
 // ---------- 传感器 / 执行件 ----------
 ESP32Timer hwTimer(3);
