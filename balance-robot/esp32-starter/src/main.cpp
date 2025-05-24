@@ -7,7 +7,7 @@
 #include "sensor_imu.h"
 #include "pid_loop.h"
 
-// ---------- 步进电机 GPIO ----------
+
 #define M1_DIR 16
 #define M1_STP 17
 #define M2_DIR 4
@@ -15,11 +15,11 @@
 #define MOT_EN 15
 #define SCOPE_PIN 32
 
-// ---------- 任务句柄 ----------
-TaskHandle_t stabilityHandle;
-TaskHandle_t serialHandle;     // 如不需要串口控制可注释
 
-// ---------- 常量 ----------
+TaskHandle_t stabilityHandle;
+TaskHandle_t serialHandle;     
+
+
 static constexpr int PRINT_MS          = 500;
 static constexpr int LOOP_MS           = 10;
 static constexpr int STEP_ISR_US       = 20;
@@ -29,15 +29,15 @@ static constexpr float  WHEEL_DIA_CM   = 6.6;
 static constexpr int    STEPS_REV      = 200*16;
 static constexpr float  TRACK_CM       = 11.9;
 static constexpr float  EMA_ALPHA      = 0.1;
-static constexpr float TILT_OFFSET = -0.042;  // 开始设为0，然后根据需要调整
+static constexpr float TILT_OFFSET = 0.2;  // 开始设为0，然后根据需要调整(-0.043)
 
-// ---------- 传感器 / 执行件 ----------
+
 ESP32Timer hwTimer(3);
 step motorL(STEP_ISR_US, M1_STP, M1_DIR);
 step motorR(STEP_ISR_US, M2_STP, M2_DIR);
 ImuSensor imu;
 
-PIDLoop pidBal (800, 18, 78, 0);
+PIDLoop pidBal (800, 18, 85, 0); //800, 18, 78
 PIDLoop pidSpd (1,   0.38, 0.23, 0);
 PIDLoop pidYaw (3,     0,     0, 0);
 
@@ -49,7 +49,7 @@ double yawCorr     = 0;
 double filtAngle = 0, prevAngle = 0;
 float  emaSpdL   = 0, emaSpdR   = 0;
 
-// ---------- 内部工具 ----------
+
 bool stepperIsr(void*) {
     static bool tgl = false;
     motorL.runStepper();
@@ -60,7 +60,7 @@ bool stepperIsr(void*) {
 }
 
 void enableMotors(bool on) {
-    digitalWrite(MOT_EN, !on);           // 低电平使能
+    digitalWrite(MOT_EN, !on);           
     motorsActive = on;
     if (!on) {
         motorL.setTargetSpeedRad(0);
@@ -70,7 +70,7 @@ void enableMotors(bool on) {
     }
 }
 
-// ---------- 串口命令（可选） ----------
+//调试命令
 void serialCommandTask(void*) {
     while (true) {
         if (Serial.available()) {
@@ -86,7 +86,7 @@ void serialCommandTask(void*) {
     }
 }
 
-// ---------- 主平衡任务 ----------
+//主平衡任务
 void stabilityTask(void*) {
     constexpr float distPerStep = (PI * WHEEL_DIA_CM) / STEPS_REV;
     static unsigned long nextLoop = 0, nextPrint = 0;
@@ -98,7 +98,7 @@ void stabilityTask(void*) {
         if (now >= nextLoop) {
             nextLoop = now + LOOP_MS;
 
-            // 采样 IMU
+            // 采样传感器
             ImuReading r; imu.fetch(r);
 
             const float dt = LOOP_MS / 1000.0;
@@ -113,7 +113,7 @@ void stabilityTask(void*) {
             else if (!motorsActive)    enableMotors(true);
 
             if (motorsActive) {
-                // 速度测量
+                // 速度测量.
                 float rawL = motorL.getSpeed() / 2000.0;
                 float rawR = motorR.getSpeed() / 2000.0;
                 emaSpdL = EMA_ALPHA*rawL + (1-EMA_ALPHA)*emaSpdL;
@@ -124,11 +124,11 @@ void stabilityTask(void*) {
                 const float spdCmS   = (spdCmS_L - spdCmS_R) / 2.0;
                 const float yawRate  = (spdCmS_L + spdCmS_R) / TRACK_CM;
 
-                // Yaw 外环
+                //  偏航外环
                 if (!turning)  yawCorr = pidYaw.run(yawRate);
                 else           yawCorr = 0;
 
-                // 速度外环 → 目标倾角
+                // 速度外环 目标倾角
                 const double targetTilt = pidSpd.run(spdCmS) * 0.001 + TILT_OFFSET;
 
                 // 平衡内环
@@ -157,12 +157,12 @@ void stabilityTask(void*) {
     }
 }
 
-// ---------- Arduino 标准入口 ----------
+
 void setup() {
     Serial.begin(115200);
     pinMode(SCOPE_PIN, OUTPUT);
     pinMode(MOT_EN, OUTPUT);
-    enableMotors(true);        // 先启用
+    enableMotors(true);       
 
     imu.begin();
 
@@ -177,5 +177,5 @@ void setup() {
 }
 
 void loop() {
-    // 空；所有逻辑在 FreeRTOS 任务中运行
+    
 }
